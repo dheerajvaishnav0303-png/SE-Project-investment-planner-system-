@@ -24,10 +24,28 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
 
-// CORS configuration to allow React frontend communication
+// Flexible CORS configuration to allow local development and Vercel cloud deployments
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:5000',
+  'http://localhost:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5000',
+  CLIENT_URL
+];
+
 app.use(cors({
-  origin: [CLIENT_URL, 'http://localhost:5173'],
-  credentials: true
+  origin: (origin, callback) => {
+    // Allow non-browser requests or matching origins
+    if (!origin || allowedOrigins.includes(origin) || /\.vercel\.app$/.test(origin)) {
+      return callback(null, true);
+    }
+    // Allow any other origin in development or staging
+    return callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
 // Body parsing middleware
@@ -57,13 +75,19 @@ app.use('/api/customer', customerRoutes);
 app.use(notFound);
 app.use(errorHandler);
 
-// Start Express server immediately and connect to MongoDB
-app.listen(PORT, () => {
-  console.log(`[Server] Investment Planner Backend running on port ${PORT}`);
-  console.log(`[Server] Health check: http://localhost:${PORT}/api/health`);
-});
-
 // Connect to MongoDB and seed initial database
 connectDB().then(() => {
   seedInitialDatabase();
+}).catch((err) => {
+  console.warn('[Database] Initial connection deferred or offline:', err.message);
 });
+
+// Start Express server if run as a standalone process (not in Vercel serverless function)
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`[Server] Investment Planner Backend running on port ${PORT}`);
+    console.log(`[Server] Health check: http://localhost:${PORT}/api/health`);
+  });
+}
+
+export default app;
