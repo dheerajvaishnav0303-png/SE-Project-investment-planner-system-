@@ -4,6 +4,7 @@ import {
   getAdminAnalytics,
   getAllUsers,
   getUserDetails,
+  updateUser,
   updateUserStatus,
   deleteUser,
   getAllInvestments,
@@ -36,6 +37,7 @@ router.get('/analytics', getAdminAnalytics);
 // User Management
 router.get('/users', getAllUsers);
 router.get('/users/:id', getUserDetails);
+router.put('/users/:id', updateUser);
 router.put('/users/:id/status', updateUserStatus);
 router.delete('/users/:id', deleteUser);
 

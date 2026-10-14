@@ -339,6 +339,55 @@ export const updateUserStatus = async (req, res, next) => {
 };
 
 /**
+ * @route   PUT /api/admin/users/:id
+ * @desc    Admin update user details (name, email, phone, role, status, wallet balance)
+ * @access  Admin
+ */
+export const updateUser = async (req, res, next) => {
+  try {
+    const { name, email, phone, role, status, walletBalance } = req.body;
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    if (name && name.trim()) user.name = name.trim();
+    if (email && email.trim()) user.email = email.toLowerCase().trim();
+    if (phone !== undefined) user.phone = phone.trim();
+    if (role && ['user', 'customer', 'admin'].includes(role)) user.role = role;
+    if (status && ['active', 'inactive', 'blocked'].includes(status)) user.status = status;
+    if (walletBalance !== undefined && !isNaN(walletBalance)) user.walletBalance = Number(walletBalance);
+
+    await user.save();
+
+    // Notify user of profile update by admin
+    await Notification.create({
+      recipient: user._id,
+      title: 'Account Details Updated by Administrator',
+      message: `Your account details have been updated. Current status: ${user.status}, Role: ${user.role}.`,
+      type: 'Alert'
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `User ${user.name} updated successfully in real-time`,
+      data: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        status: user.status,
+        walletBalance: user.walletBalance,
+        updatedAt: user.updatedAt
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * @route   DELETE /api/admin/users/:id
  * @desc    Delete user account and cascade
  * @access  Admin

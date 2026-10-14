@@ -72,9 +72,27 @@ export default function AdminPortal({ currentUser, onLogout, onSwitchToCustomerV
 
   // Modals
   const [selectedUserModal, setSelectedUserModal] = useState(null);
+  const [editingUserModal, setEditingUserModal] = useState(null);
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [editingPlan, setEditingPlan] = useState(null);
   const [showNotificationModal, setShowNotificationModal] = useState(false);
+
+  // Real-Time Live Sync Engine States
+  const [liveSyncEnabled, setLiveSyncEnabled] = useState(true);
+  const [syncIntervalSeconds, setSyncIntervalSeconds] = useState(4);
+  const [lastSyncTime, setLastSyncTime] = useState(new Date());
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [previousUserCount, setPreviousUserCount] = useState(null);
+
+  // Real-Time User Edit Form
+  const [userEditForm, setUserEditForm] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    role: 'customer',
+    status: 'active',
+    walletBalance: 0
+  });
 
   // Forms
   const [planForm, setPlanForm] = useState({
@@ -253,7 +271,94 @@ export default function AdminPortal({ currentUser, onLogout, onSwitchToCustomerV
       activeSection === 'settings' && loadSettings()
     ]);
     setLoading(false);
-    showToast('success', 'Data refreshed from MongoDB');
+  };
+
+  // Real-Time Background Live Sync Effect
+  useEffect(() => {
+    if (!liveSyncEnabled) return;
+
+    const intervalId = setInterval(async () => {
+      setIsSyncing(true);
+      try {
+        const [dashRes, usersRes] = await Promise.all([
+          api.getAdminDashboard().catch(() => null),
+          api.getAdminUsers({ status: userStatusFilter, search: globalSearch }).catch(() => null)
+        ]);
+
+        if (dashRes?.success && dashRes.data) {
+          setDashboardData(dashRes.data);
+        }
+
+        if (usersRes?.success && Array.isArray(usersRes.data)) {
+          // Detect newly joined users in real time
+          if (previousUserCount !== null && usersRes.data.length > previousUserCount) {
+            const newestUser = usersRes.data[0];
+            showToast('success', `⚡ Real-time Update: New Investor "${newestUser?.name || 'User'}" joined!`);
+          }
+          setPreviousUserCount(usersRes.data.length);
+          setUsersList(usersRes.data);
+        }
+
+        setLastSyncTime(new Date());
+      } catch {
+        // Silent catch for smooth background sync
+      } finally {
+        setIsSyncing(false);
+      }
+    }, syncIntervalSeconds * 1000);
+
+    return () => clearInterval(intervalId);
+  }, [liveSyncEnabled, syncIntervalSeconds, userStatusFilter, globalSearch, previousUserCount]);
+
+  // Real-Time User Edit Handlers
+  const handleOpenEditUser = (user) => {
+    setEditingUserModal(user);
+    setUserEditForm({
+      name: user.name || '',
+      email: user.email || '',
+      phone: user.phone || '',
+      role: user.role || 'customer',
+      status: user.status || 'active',
+      walletBalance: user.walletBalance !== undefined ? user.walletBalance : 0
+    });
+  };
+
+  const handleSaveUserUpdate = async (e) => {
+    e.preventDefault();
+    if (!editingUserModal) return;
+    setActionLoading(true);
+
+    try {
+      const res = await api.updateAdminUser(editingUserModal._id, userEditForm);
+      if (res.success) {
+        showToast('success', `Real-time update: User "${userEditForm.name}" updated successfully!`);
+
+        // Immediate optimistic UI update
+        setUsersList((prev) =>
+          prev.map((u) => (u._id === editingUserModal._id ? { ...u, ...userEditForm } : u))
+        );
+
+        if (selectedUserModal && selectedUserModal.user._id === editingUserModal._id) {
+          setSelectedUserModal((prev) => ({
+            ...prev,
+            user: { ...prev.user, ...userEditForm },
+            portfolioSummary: {
+              ...prev.portfolioSummary,
+              walletBalance: userEditForm.walletBalance
+            }
+          }));
+        }
+
+        setEditingUserModal(null);
+        await Promise.all([loadUsers(), loadDashboard()]);
+      } else {
+        showToast('error', res.error || 'Failed to update user');
+      }
+    } catch (err) {
+      showToast('error', err.message || 'Error updating user');
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   // User Actions
@@ -662,10 +767,60 @@ export default function AdminPortal({ currentUser, onLogout, onSwitchToCustomerV
               />
             </div>
 
-            {/* Live DB Indicator */}
-            <div className="hidden lg:flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800/80 border border-slate-700 text-xs">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-slate-300 font-medium">MongoDB Online</span>
+            {/* Real-time Live Sync Indicator & Controls */}
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs shadow-inner">
+              <div className="flex items-center gap-2">
+                <span className="relative flex h-2 w-2">
+                  {liveSyncEnabled && (
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  )}
+                  <span className={`relative inline-flex rounded-full h-2 w-2 ${liveSyncEnabled ? 'bg-emerald-500' : 'bg-slate-500'}`}></span>
+                </span>
+                <span className="font-semibold text-slate-200 hidden xl:inline">
+                  {liveSyncEnabled ? 'Real-Time Sync' : 'Sync Paused'}
+                </span>
+              </div>
+
+              <div className="h-3.5 w-px bg-slate-800 hidden sm:block" />
+
+              {/* Auto Sync Toggle */}
+              <button
+                type="button"
+                onClick={() => {
+                  setLiveSyncEnabled(!liveSyncEnabled);
+                  showToast('success', !liveSyncEnabled ? 'Live auto-sync resumed' : 'Live auto-sync paused');
+                }}
+                title={liveSyncEnabled ? 'Pause Live Sync' : 'Resume Live Sync'}
+                className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase transition ${
+                  liveSyncEnabled
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30'
+                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                }`}
+              >
+                {liveSyncEnabled ? 'LIVE' : 'PAUSED'}
+              </button>
+
+              {/* Sync Interval Selector */}
+              <select
+                value={syncIntervalSeconds}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setSyncIntervalSeconds(val);
+                  showToast('success', `Real-time sync rate set to ${val}s`);
+                }}
+                className="bg-slate-800 text-[10px] text-slate-300 border border-slate-700 rounded px-1.5 py-0.5 focus:outline-none"
+                title="Polling interval rate"
+              >
+                <option value="3">3s</option>
+                <option value="5">5s</option>
+                <option value="10">10s</option>
+              </select>
+
+              {/* Spinning sync activity icon */}
+              <RefreshCw
+                className={`w-3 h-3 text-slate-400 transition ${isSyncing ? 'animate-spin text-indigo-400' : ''}`}
+                title={`Last synced at ${lastSyncTime.toLocaleTimeString()}`}
+              />
             </div>
 
             {/* Quick Action: New Plan Button */}
@@ -1114,6 +1269,14 @@ export default function AdminPortal({ currentUser, onLogout, onSwitchToCustomerV
                           </td>
                           <td className="py-3 px-4 text-right">
                             <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => handleOpenEditUser(user)}
+                                title="Real-Time Edit User Account"
+                                className="px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 rounded-lg border border-amber-500/30 flex items-center gap-1 transition text-xs"
+                              >
+                                <Edit className="w-3 h-3" />
+                                <span>Edit</span>
+                              </button>
                               <button
                                 onClick={() => handleViewUser(user._id)}
                                 title="Inspect User Portfolio & Account"
@@ -2069,7 +2232,8 @@ export default function AdminPortal({ currentUser, onLogout, onSwitchToCustomerV
             </div>
 
             {/* Quick Status and Actions */}
-            <div className="pt-4 border-t border-slate-800 flex items-center justify-between">
+            {/* Quick Status and Actions */}
+            <div className="pt-4 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <span className="text-xs text-slate-400">Update Status:</span>
                 {['active', 'inactive', 'blocked'].map((st) => (
@@ -2085,6 +2249,13 @@ export default function AdminPortal({ currentUser, onLogout, onSwitchToCustomerV
                     {st}
                   </button>
                 ))}
+                <button
+                  onClick={() => handleOpenEditUser(selectedUserModal.user)}
+                  className="px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ml-1"
+                >
+                  <Edit className="w-3.5 h-3.5" />
+                  <span>Edit Profile</span>
+                </button>
               </div>
 
               <button
@@ -2095,6 +2266,134 @@ export default function AdminPortal({ currentUser, onLogout, onSwitchToCustomerV
                 <span>Delete Account</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* MODAL: REAL-TIME USER UPDATE */}
+      {/* ======================================================== */}
+      {editingUserModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center">
+                  <UserCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    Real-Time User Update
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                      Live
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400">Modify investor profile, credentials, and wallet balance</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setEditingUserModal(null)}
+                className="p-2 text-slate-400 hover:text-white rounded-lg bg-slate-800 transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Edit Form */}
+            <form onSubmit={handleSaveUserUpdate} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Full Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={userEditForm.name}
+                    onChange={(e) => setUserEditForm({ ...userEditForm, name: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Email Address</label>
+                  <input
+                    type="email"
+                    required
+                    value={userEditForm.email}
+                    onChange={(e) => setUserEditForm({ ...userEditForm, email: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Phone Number</label>
+                  <input
+                    type="text"
+                    value={userEditForm.phone}
+                    onChange={(e) => setUserEditForm({ ...userEditForm, phone: e.target.value })}
+                    placeholder="+91 98765 43210"
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Wallet Balance (₹)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="100"
+                    value={userEditForm.walletBalance}
+                    onChange={(e) => setUserEditForm({ ...userEditForm, walletBalance: Number(e.target.value) })}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Account Role</label>
+                  <select
+                    value={userEditForm.role}
+                    onChange={(e) => setUserEditForm({ ...userEditForm, role: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="customer">Customer / Investor</option>
+                    <option value="admin">Administrator</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Account Status</label>
+                  <select
+                    value={userEditForm.status}
+                    onChange={(e) => setUserEditForm({ ...userEditForm, status: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="active">Active (Full Access)</option>
+                    <option value="inactive">Inactive (Limited)</option>
+                    <option value="blocked">Blocked / Suspended</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setEditingUserModal(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white bg-slate-800 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading}
+                  className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 flex items-center gap-1.5 shadow-lg shadow-indigo-600/30 transition disabled:opacity-50"
+                >
+                  {actionLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                  <span>Save Real-Time</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

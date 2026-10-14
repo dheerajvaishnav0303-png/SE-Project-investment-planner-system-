@@ -255,14 +255,37 @@ function handleDemoFallback(endpoint, options = {}) {
       };
     }
     if (endpoint.startsWith('/admin/users')) {
+      let users = getStorage('admin_users_list', [
+        { _id: 'u1', name: 'Rahul Sharma', email: 'rahul.sharma@example.com', phone: '+91 98765 43210', role: 'customer', status: 'active', totalInvestment: 215000, portfolioValue: 248000, walletBalance: 15000, createdAt: '2024-01-10' },
+        { _id: 'u2', name: 'Priya Patel', email: 'priya.patel@example.com', phone: '+91 98765 12345', role: 'customer', status: 'active', totalInvestment: 150000, portfolioValue: 172000, walletBalance: 8000, createdAt: '2024-02-14' },
+        { _id: 'u3', name: 'Amit Verma', email: 'amit.verma@example.com', phone: '+91 98765 67890', role: 'customer', status: 'active', totalInvestment: 80000, portfolioValue: 92500, walletBalance: 12000, createdAt: '2024-03-01' }
+      ]);
+
+      if (method === 'PUT' && !endpoint.endsWith('/status')) {
+        const id = endpoint.split('/').pop();
+        const idx = users.findIndex((u) => u._id === id);
+        if (idx !== -1) {
+          users[idx] = { ...users[idx], ...body, updatedAt: new Date().toISOString() };
+          setStorage('admin_users_list', users);
+          return { success: true, message: `User ${users[idx].name} updated in real-time`, data: users[idx] };
+        }
+      }
+
+      if (method === 'PUT' && endpoint.endsWith('/status')) {
+        const parts = endpoint.split('/');
+        const id = parts[parts.length - 2];
+        const idx = users.findIndex((u) => u._id === id);
+        if (idx !== -1) {
+          users[idx].status = body.status;
+          setStorage('admin_users_list', users);
+          return { success: true, message: `User status updated to ${body.status}`, data: users[idx] };
+        }
+      }
+
       return {
         success: true,
-        data: [
-          { _id: 'u1', name: 'Rahul Sharma', email: 'rahul.sharma@example.com', role: 'customer', status: 'active', createdAt: '2024-01-10' },
-          { _id: 'u2', name: 'Priya Patel', email: 'priya.patel@example.com', role: 'customer', status: 'active', createdAt: '2024-02-14' },
-          { _id: 'u3', name: 'Amit Verma', email: 'amit.verma@example.com', role: 'customer', status: 'active', createdAt: '2024-03-01' }
-        ],
-        total: 3
+        data: users,
+        total: users.length
       };
     }
     if (endpoint.startsWith('/admin/investments') || endpoint.startsWith('/admin/plans')) {
@@ -517,6 +540,11 @@ export const api = {
     return request(`/admin/users${qs ? `?${qs}` : ''}`);
   },
   getAdminUserDetails: (id) => request(`/admin/users/${id}`),
+  updateAdminUser: (id, data) =>
+    request(`/admin/users/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    }),
   updateAdminUserStatus: (id, status) =>
     request(`/admin/users/${id}/status`, {
       method: 'PUT',
